@@ -1,87 +1,127 @@
 const express = require('express');
-const app = express();
 const bodyParser = require('body-parser');
 const { v4: uuidv4 } = require('uuid');
+const app = express();
 
-// 기본 셋팅
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// 메모리 임시 저장소 (진짜 배포 때는 DB 써야 함)
-const users = {};        // user_id => { 구글/애플/스팀 ID들 }
-const nicknames = {};    // user_id => nickname
-const characters = {};   // user_id => character data
+// 메모리 DB (배포시 진짜 DB로 바꿔야 함)
+const users = {};       // user_id: { platform_type: platform_id, ... }
+const nicknames = {};   // user_id: nickname
+const characters = {};  // user_id: character_data
 
-// ✅ 로그인 처리
+// ✅ 로그인
 app.post('/login', (req, res) => {
-    const { platform_id, platform_type } = req.body; // platform_type: google, apple, steam
+    const { login_type, platform_id } = req.body;
 
-    // platform_id가 이미 users에 연결되어 있는지 검사
-    let existingUserId = null;
+    // 1. platform_id로 기존 user 찾기
+    let foundUserId = null;
     for (const userId in users) {
-        if (users[userId][platform_type] === platform_id) {
-            existingUserId = userId;
+        if (users[userId][login_type] === platform_id) {
+            foundUserId = userId;
             break;
         }
     }
 
-    // 이미 연결된 유저
-    if (existingUserId) {
-        return res.json({ success: true, user_id: existingUserId });
+    if (foundUserId) {
+        return res.json({ success: true, user_id: foundUserId });
     }
 
-    // 없으면 새 유저 발급
-    const newUserId = uuidv4();
-    users[newUserId] = { [platform_type]: platform_id };
+    // 2. 없으면 새로 user_id 발급
+    const newUserId = "U_" + uuidv4();
+    users[newUserId] = { [login_type]: platform_id };
     return res.json({ success: true, user_id: newUserId });
 });
 
-// ✅ 플랫폼 추가 연동
-app.post('/link_platform', (req, res) => {
-    const { user_id, platform_id, platform_type } = req.body;
+// ✅ 게스트 등록
+app.post('/register_guest', (req, res) => {
+    const { guest_id } = req.body;
 
-    // 이미 다른 user_id에 연결된 platform_id가 있는지 검사
-    for (const otherUserId in users) {
-        if (users[otherUserId][platform_type] === platform_id && otherUserId !== user_id) {
-            return res.json({
-                success: false,
-                message: "해당 플랫폼 계정은 이미 다른 유저 아이디에 연결되어 있습니다. 기존 계정으로 로그인 해주세요."
-            });
-        }
+    if (!guest_id.startsWith("G_")) {
+        return res.json({ success: false, message: "Invalid guest ID format." });
     }
 
-    // 문제 없으면 현재 user_id에 플랫폼 연동
-    if (!users[user_id]) users[user_id] = {};
-    users[user_id][platform_type] = platform_id;
-    return res.json({ success: true, message: "플랫폼 연동 완료" });
+    if (!users[guest_id]) {
+        users[guest_id] = { guest: guest_id };
+    }
+
+    return res.json({ success: true });
+});
+
+// ✅ 게임 데이터 조회
+app.post('/check_game_data', (req, res) => {
+    const { id } = req.body;
+
+    const hasNickname = nicknames[id] ? true : false;
+    const hasCharacter = characters[id] ? true : false;
+
+    return res.json({
+        success: true,
+        has_nickname: hasNickname,
+        has_character: hasCharacter
+    });
+});
+
+// ✅ 닉네임 중복 검사
+app.post('/check_nickname', (req, res) => {
+    const { nickname } = req.body;
+
+    const isDuplicate = Object.values(nicknames).includes(nickname);
+
+    if (isDuplicate) {
+        return res.json({ success: false, message: "닉네임 중복" });
+    }
+
+    return res.json({ success: true, message: "사용 가능한 닉네임" });
 });
 
 // ✅ 닉네임 저장
 app.post('/save_nickname', (req, res) => {
-    const { user_id, nickname } = req.body;
-    nicknames[user_id] = nickname;
+    const { id, nickname } = req.body;
+
+    nicknames[id] = nickname;
+
+    const hasCharacter = characters[id] ? true : false;
 
     return res.json({
         success: true,
         has_nickname: true,
-        has_character: characters[user_id] ? true : false
+        has_character: hasCharacter
     });
 });
 
 // ✅ 캐릭터 저장
 app.post('/create_character', (req, res) => {
-    const { user_id, character_data } = req.body;
-    characters[user_id] = character_data;
+    const { id, character_data } = req.body;
+
+    characters[id] = character_data;
+
+    const hasNickname = nicknames[id] ? true : false;
 
     return res.json({
         success: true,
-        has_nickname: nicknames[user_id] ? true : false,
+        has_nickname: hasNickname,
         has_character: true
     });
 });
 
-// ✅ 서버 포트 열기
+// ✅ 현재 연결된 플랫폼 정보 요청
+app.post('/get_linked_platforms', (req, res) => {
+    const { user_id } = req.body;
+
+    if (!users[user_id]) {
+        return res.json({ success: false, message: "유저 없음" });
+    }
+
+    return res.json({
+        success: true,
+        platforms: users[user_id]  // ex) { google: "xxxx", steam: "yyyy", apple: "zzzz" }
+    });
+});
+
+// ✅ 서버 실행
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-    console.log(`✅ 서버가 포트 ${port}에서 실행 중`);
+    console.log(`✅ 서버 실행 중 (포트: ${port})`);
 });
